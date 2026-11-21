@@ -1,0 +1,326 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FX Execution Terminal</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --card: #121826;
+      --border: #232d42;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #2563eb;
+      --win: #10b981;
+      --loss: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+    }
+    .hidden { display: none !important; }
+    .auth-wrap {
+      max-width: 420px;
+      margin: 40px auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+    }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tabs button { flex: 1; }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    input, select, button {
+      font: inherit;
+      color: var(--text);
+      background: #182032;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    button { cursor: pointer; font-weight: 600; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.active { background: var(--accent); border-color: var(--accent); }
+    .msg { font-size: 0.88rem; color: #93c5fd; min-height: 20px; margin-top: 8px; }
+    .err { color: #f87171; }
+
+    .container { max-width: 980px; margin: 0 auto; }
+    .topbar {
+      display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+      gap: 12px; margin-bottom: 16px;
+    }
+    .stats {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px; margin-bottom: 16px;
+    }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px; margin-bottom: 16px;
+    }
+    .label { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; }
+    .val { font-size: 1.35rem; font-weight: 700; margin-top: 4px; }
+    #tv-chart { height: 360px; width: 100%; border-radius: 8px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    th { color: var(--muted); }
+    .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div id="authScreen" class="auth-wrap">
+    <h2 style="margin-top:0;">FX Terminal Account</h2>
+    <p style="color:var(--muted);font-size:0.9rem;margin-top:0;">
+      Sign up with WhatsApp OTP verification or log in to your account.
+    </p>
+    <div class="tabs">
+      <button id="tabSignup" class="primary">Sign Up</button>
+      <button id="tabLogin">Log In</button>
+    </div>
+
+    <div id="signupBox" class="stack">
+      <input id="suPhone" type="tel" placeholder="Phone number (e.g. 2348012345678)" required />
+      <input id="suEmail" type="email" placeholder="Email address" required />
+      <input id="suPassword" type="password" placeholder="Password (min 6 characters)" required />
+      <button id="sendOtpBtn" class="primary">Send OTP via WhatsApp</button>
+
+      <div id="otpStep" class="stack hidden" style="margin-top:8px;padding-top:10px;border-top:1px solid var(--border);">
+        <input id="otpCode" type="text" maxlength="6" placeholder="Enter 6-digit OTP" />
+        <button id="verifyOtpBtn" class="primary">Verify OTP & Create Account</button>
+      </div>
+    </div>
+
+    <div id="loginBox" class="stack hidden">
+      <input id="liIdentifier" type="text" placeholder="Phone number or Email" required />
+      <input id="liPassword" type="password" placeholder="Password" required />
+      <button id="loginBtn" class="primary">Log In</button>
+    </div>
+
+    <div id="authMsg" class="msg"></div>
+  </div>
+
+  <div id="appScreen" class="container hidden">
+    <div class="topbar">
+      <div>
+        <h2 style="margin:0;">Trading Execution Workspace</h2>
+        <div id="sessionUser" style="color:var(--muted);font-size:0.85rem;"></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button id="toggleAddBtn" class="primary">+ Add Trade</button>
+        <button id="logoutBtn">Log Out</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="card" style="margin:0;"><div class="label">Total Logged</div><div id="sTotal" class="val">0</div></div>
+      <div class="card" style="margin:0;"><div class="label">Win Rate</div><div id="sWinRate" class="val">0.0%</div></div>
+      <div class="card" style="margin:0;"><div class="label">Net Return (R)</div><div id="sNetR" class="val">0.0R</div></div>
+      <div class="card" style="margin:0;"><div class="label">Avg Winner</div><div id="sAvgWin" class="val">0.0R</div></div>
+    </div>
+
+    <div id="addTradeCard" class="card hidden">
+      <strong>New Trade Entry</strong>
+      <form id="tradeForm" class="form-row">
+        <input id="tDate" type="date" required />
+        <select id="tPair">
+          <option value="XAUUSD">XAUUSD</option>
+          <option value="EURUSD">EURUSD</option>
+          <option value="GBPUSD">GBPUSD</option>
+          <option value="BTCUSD">BTCUSD</option>
+        </select>
+        <select id="tSide">
+          <option value="Buy">Buy</option>
+          <option value="Sell">Sell</option>
+        </select>
+        <input id="tSetup" type="text" placeholder="Setup / Model" required />
+        <input id="tR" type="number" step="0.1" placeholder="Result in R (e.g. 2.5 or -1)" required />
+        <button type="submit" class="primary">Save</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+        <strong>Live Chart</strong>
+        <div id="chartPairs" style="display:flex;gap:6px;">
+          <button class="active" data-sym="OANDA:XAUUSD">XAUUSD</button>
+          <button data-sym="OANDA:EURUSD">EURUSD</button>
+          <button data-sym="OANDA:GBPUSD">GBPUSD</button>
+          <button data-sym="BITSTAMP:BTCUSD">BTCUSD</button>
+        </div>
+      </div>
+      <div id="tv-chart"></div>
+    </div>
+
+    <div class="card">
+      <strong>Trade Log</strong>
+      <div style="overflow-x:auto;margin-top:8px;">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Pair</th><th>Side</th><th>Setup</th><th>Result</th></tr>
+          </thead>
+          <tbody id="tradeBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <script>
+    const API_BASE = "";
+    let trades = [];
+
+    const authMsg = document.getElementById("authMsg");
+    function setMsg(text, isError = false) {
+      authMsg.textContent = text;
+      authMsg.className = isError ? "msg err" : "msg";
+    }
+
+    document.getElementById("tabSignup").onclick = () => {
+      document.getElementById("tabSignup").classList.add("primary");
+      document.getElementById("tabLogin").classList.remove("primary");
+      document.getElementById("signupBox").classList.remove("hidden");
+      document.getElementById("loginBox").classList.add("hidden");
+      setMsg("");
+    };
+
+    document.getElementById("tabLogin").onclick = () => {
+      document.getElementById("tabLogin").classList.add("primary");
+      document.getElementById("tabSignup").classList.remove("primary");
+      document.getElementById("loginBox").classList.remove("hidden");
+      document.getElementById("signupBox").classList.add("hidden");
+      setMsg("");
+    };
+
+    document.getElementById("sendOtpBtn").onclick = async () => {
+      setMsg("Sending OTP via WhatsApp...");
+      const res = await fetch(`${API_BASE}/api/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: document.getElementById("suPhone").value,
+          email: document.getElementById("suEmail").value,
+          password: document.getElementById("suPassword").value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMsg(data.error || "Error sending OTP", true);
+      document.getElementById("otpStep").classList.remove("hidden");
+      setMsg(data.message);
+    };
+
+    document.getElementById("verifyOtpBtn").onclick = async () => {
+      setMsg("Verifying OTP...");
+      const res = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: document.getElementById("suPhone").value,
+          otp: document.getElementById("otpCode").value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMsg(data.error || "Invalid OTP", true);
+      openApp(data.user);
+    };
+
+    document.getElementById("loginBtn").onclick = async () => {
+      setMsg("Logging in...");
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: document.getElementById("liIdentifier").value,
+          password: document.getElementById("liPassword").value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMsg(data.error || "Login failed", true);
+      openApp(data.user);
+    };
+
+    function openApp(user) {
+      document.getElementById("authScreen").classList.add("hidden");
+      document.getElementById("appScreen").classList.remove("hidden");
+      document.getElementById("sessionUser").textContent = `${user.email} • +${user.phone}`;
+      loadChart("OANDA:XAUUSD");
+      renderTrades();
+    }
+
+    document.getElementById("logoutBtn").onclick = () => {
+      document.getElementById("appScreen").classList.add("hidden");
+      document.getElementById("authScreen").classList.remove("hidden");
+      setMsg("Logged out.");
+    };
+
+    function loadChart(symbol) {
+      document.getElementById("tv-chart").innerHTML = "";
+      new TradingView.widget({
+        autosize: true,
+        symbol,
+        interval: "60",
+        timezone: "Africa/Lagos",
+        theme: "dark",
+        style: "1",
+        locale: "en",
+        container_id: "tv-chart"
+      });
+    }
+
+    document.getElementById("chartPairs").addEventListener("click", (e) => {
+      if (e.target.tagName !== "BUTTON") return;
+      document.querySelectorAll("#chartPairs button").forEach(b => b.classList.remove("active"));
+      e.target.classList.add("active");
+      loadChart(e.target.dataset.sym);
+    });
+
+    document.getElementById("toggleAddBtn").onclick = () => {
+      document.getElementById("addTradeCard").classList.toggle("hidden");
+    };
+
+    document.getElementById("tradeForm").onsubmit = (e) => {
+      e.preventDefault();
+      trades.unshift({
+        date: document.getElementById("tDate").value,
+        pair: document.getElementById("tPair").value,
+        side: document.getElementById("tSide").value,
+        setup: document.getElementById("tSetup").value,
+        r: parseFloat(document.getElementById("tR").value)
+      });
+      e.target.reset();
+      document.getElementById("addTradeCard").classList.add("hidden");
+      renderTrades();
+    };
+
+    function renderTrades() {
+      const total = trades.length;
+      const wins = trades.filter(t => t.r > 0);
+      const winRate = total ? ((wins.length / total) * 100).toFixed(1) : "0.0";
+      const netR = trades.reduce((acc, t) => acc + t.r, 0).toFixed(1);
+      const avgWin = wins.length ? (wins.reduce((acc, t) => acc + t.r, 0) / wins.length).toFixed(1) : "0.0";
+
+      document.getElementById("sTotal").textContent = String(total);
+      document.getElementById("sWinRate").textContent = `${winRate}%`;
+      document.getElementById("sNetR").textContent = `${Number(netR) > 0 ? "+" : ""}${netR}R`;
+      document.getElementById("sAvgWin").textContent = `+${avgWin}R`;
+
+      const tbody = document.getElementById("tradeBody");
+      tbody.innerHTML = trades.map(t => `
+        <tr>
+          <td>${t.date}</td>
+          <td><strong>${t.pair}</strong></td>
+          <td>${t.side}</td>
+          <td>${t.setup}</td>
+          <td style="color:${t.r > 0 ? "var(--win)" : t.r < 0 ? "var(--loss)" : "var(--muted)"};font-weight:700;">
+            ${t.r > 0 ? "+" : ""}${t.r}R
+          </td>
+        </tr>
+      `).join("");
+    }
+  </script>
+</body>
+          </html>
