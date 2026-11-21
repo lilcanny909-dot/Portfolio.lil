@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import express from "express";
 import cors from "cors";
 import pino from "pino";
@@ -14,13 +16,34 @@ app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
 const PAIRING_PHONE = "2347084758045";
+const DATA_FILE = path.resolve("./store_data.json");
 
 let sock = null;
 let waReady = false;
 let pairingRequested = false;
 
 const pendingOtps = new Map();
-const users = new Map();
+
+function loadStore() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    }
+  } catch (err) {
+    console.error("Failed to read store_data.json:", err.message);
+  }
+  return { users: {}, tradesByUser: {} };
+}
+
+function saveStore(data) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error("Failed to write store_data.json:", err.message);
+  }
+}
+
+const store = loadStore();
 
 function normalizePhone(raw) {
   const digits = String(raw || "").replace(/\D/g, "");
@@ -36,6 +59,12 @@ function hashPassword(password) {
 
 function generateOtp() {
   return String(crypto.randomInt(100000, 999999));
+}
+
+function createToken(phone) {
+  return crypto.createHmac("sha256", process.env.SESSION_SECRET || "fx-terminal-secret")
+    .update(`${phone}:${Date.now()}`)
+    .digest("hex");
 }
 
 async function startWhatsApp() {
@@ -56,7 +85,6 @@ async function startWhatsApp() {
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // Trigger pairing code when unregistered (no QR code generated)
     if (qr && !sock.authState.creds.registered && !pairingRequested) {
       pairingRequested = true;
       try {
@@ -90,7 +118,7 @@ async function startWhatsApp() {
   });
 }
 
-// Sign Up: Generate OTP & send via WhatsApp to the phone number entered by the user
+// Step 1: Sign up & send OTP via WhatsApp
 app.post("/api/auth/signup", async (req, res) => {
   try {
     const { phone, email, password } = req.body;
@@ -137,7 +165,7 @@ app.post("/api/auth/signup", async (req, res) => {
   }
 });
 
-// Verify OTP & create account
+// Step 2: Verify OTP & create account
 app.post("/api/auth/verify-otp", (req, res) => {
   const { phone, otp } = req.body;
   const targetPhone = normalizePhone(phone);
@@ -154,19 +182,27 @@ app.post("/api/auth/verify-otp", (req, res) => {
     return res.status(400).json({ error: "Incorrect OTP code." });
   }
 
-  users.set(targetPhone, {
+  const token = createToken(targetPhone);
+  store.users[targetPhone] = {
     ...record.user,
-    verified: true
-  });
+    verified: true,
+    token
+  };
+  if (!store.tradesByUser[targetPhone]) {
+    store.tradesByUser[targetPhone] = [];
+  }
+  saveStore(store);
   pendingOtps.delete(targetPhone);
 
   return res.json({
     ok: true,
-    user: { phone: targetPhone, email: record.user.email }
+    token,
+    user: { phone: targetPhone, email: record.user.email },
+    trades: store.tradesByUser[targetPhone]
   });
 });
 
-// Log In
+// Step 3: Log In
 app.post("/api/auth/login", (req, res) => {
   const { identifier, password } = req.body;
   if (!identifier || !password) {
@@ -177,24 +213,58 @@ app.post("/api/auth/login", (req, res) => {
   const queryEmail = String(identifier).trim().toLowerCase();
   const pwdHash = hashPassword(password);
 
-  let matchedUser = users.get(normalized);
+  let matchedUser = store.users[normalized];
   if (!matchedUser) {
-    for (const u of users.values()) {
-      if (u.email === queryEmail) {
-        matchedUser = u;
-        break;
-      }
-    }
+    matchedUser = Object.values(store.users).find((u) => u.email === queryEmail);
   }
 
   if (!matchedUser || !matchedUser.verified || matchedUser.passwordHash !== pwdHash) {
     return res.status(401).json({ error: "Invalid login credentials." });
   }
 
+  const token = matchedUser.token || createToken(matchedUser.phone);
+  matchedUser.token = token;
+  if (!store.tradesByUser[matchedUser.phone]) {
+    store.tradesByUser[matchedUser.phone] = [];
+  }
+  saveStore(store);
+
   return res.json({
     ok: true,
-    user: { phone: matchedUser.phone, email: matchedUser.email }
+    token,
+    user: { phone: matchedUser.phone, email: matchedUser.email },
+    trades: store.tradesByUser[matchedUser.phone]
   });
+});
+
+// Session restore on reload
+app.get("/api/session", (req, res) => {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return res.status(401).json({ error: "Not authenticated" });
+
+  const user = Object.values(store.users).find((u) => u.token === token);
+  if (!user) return res.status(401).json({ error: "Invalid session" });
+
+  return res.json({
+    ok: true,
+    user: { phone: user.phone, email: user.email },
+    trades: store.tradesByUser[user.phone] || []
+  });
+});
+
+// Save user's trades
+app.put("/api/trades", (req, res) => {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const user = Object.values(store.users).find((u) => u.token === token);
+  if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+  const incomingTrades = Array.isArray(req.body.trades) ? req.body.trades : [];
+  store.tradesByUser[user.phone] = incomingTrades;
+  saveStore(store);
+
+  return res.json({ ok: true, trades: store.tradesByUser[user.phone] });
 });
 
 startWhatsApp();
