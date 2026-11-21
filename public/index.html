@@ -1,9 +1,10 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b0f17" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <title>FX Execution Terminal</title>
   <style>
     :root {
@@ -74,8 +75,11 @@
 </head>
 <body>
   <div id="authScreen" class="auth-wrap">
-    <h2 style="margin-top:0;">FX Terminal Account</h2>
-    <p style="color:var(--muted);font-size:0.9rem;margin-top:0;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <h2 style="margin:0;">FX Terminal Account</h2>
+      <button id="installAuthBtn" class="hidden">Install App</button>
+    </div>
+    <p style="color:var(--muted);font-size:0.9rem;">
       Sign up with WhatsApp OTP verification or log in to your account.
     </p>
     <div class="tabs">
@@ -110,7 +114,8 @@
         <h2 style="margin:0;">Trading Execution Workspace</h2>
         <div id="sessionUser" style="color:var(--muted);font-size:0.85rem;"></div>
       </div>
-      <div style="display:flex;gap:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button id="installAppBtn" class="hidden">Install App</button>
         <button id="toggleAddBtn" class="primary">+ Add Trade</button>
         <button id="logoutBtn">Log Out</button>
       </div>
@@ -146,7 +151,7 @@
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
         <strong>Live Chart</strong>
-        <div id="chartPairs" style="display:flex;gap:6px;">
+        <div id="chartPairs" style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="active" data-sym="OANDA:XAUUSD">XAUUSD</button>
           <button data-sym="OANDA:EURUSD">EURUSD</button>
           <button data-sym="OANDA:GBPUSD">GBPUSD</button>
@@ -172,12 +177,59 @@
   <script src="https://s3.tradingview.com/tv.js"></script>
   <script>
     const API_BASE = "";
+    const TOKEN_KEY = "fx_session_token";
+    let currentUser = null;
     let trades = [];
+    let deferredPrompt = null;
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      document.getElementById("installAuthBtn").classList.remove("hidden");
+      document.getElementById("installAppBtn").classList.remove("hidden");
+    });
+
+    async function triggerInstall() {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      document.getElementById("installAuthBtn").classList.add("hidden");
+      document.getElementById("installAppBtn").classList.add("hidden");
+    }
+
+    document.getElementById("installAuthBtn").onclick = triggerInstall;
+    document.getElementById("installAppBtn").onclick = triggerInstall;
 
     const authMsg = document.getElementById("authMsg");
     function setMsg(text, isError = false) {
       authMsg.textContent = text;
       authMsg.className = isError ? "msg err" : "msg";
+    }
+
+    function localTradesKey(phone) {
+      return `fx_trades_${phone}`;
+    }
+
+    async function syncTradesToServer() {
+      if (!currentUser) return;
+      localStorage.setItem(localTradesKey(currentUser.phone), JSON.stringify(trades));
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) return;
+      try {
+        await fetch(`${API_BASE}/api/trades`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify({ trades })
+        });
+      } catch (_) {}
     }
 
     document.getElementById("tabSignup").onclick = () => {
@@ -225,7 +277,8 @@
       });
       const data = await res.json();
       if (!res.ok) return setMsg(data.error || "Invalid OTP", true);
-      openApp(data.user);
+      if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+      openApp(data.user, data.trades || []);
     };
 
     document.getElementById("loginBtn").onclick = async () => {
@@ -240,10 +293,16 @@
       });
       const data = await res.json();
       if (!res.ok) return setMsg(data.error || "Login failed", true);
-      openApp(data.user);
+      if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+      openApp(data.user, data.trades || []);
     };
 
-    function openApp(user) {
+    function openApp(user, serverTrades = []) {
+      currentUser = user;
+      const savedLocal = JSON.parse(localStorage.getItem(localTradesKey(user.phone)) || "null");
+      trades = serverTrades.length ? serverTrades : (Array.isArray(savedLocal) ? savedLocal : []);
+      localStorage.setItem(localTradesKey(user.phone), JSON.stringify(trades));
+
       document.getElementById("authScreen").classList.add("hidden");
       document.getElementById("appScreen").classList.remove("hidden");
       document.getElementById("sessionUser").textContent = `${user.email} • +${user.phone}`;
@@ -251,7 +310,25 @@
       renderTrades();
     }
 
+    // Restore active session on page reload
+    (async function restoreSession() {
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/session`, {
+          headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ok && data.user) {
+          openApp(data.user, data.trades || []);
+        }
+      } catch (_) {}
+    })();
+
     document.getElementById("logoutBtn").onclick = () => {
+      localStorage.removeItem(TOKEN_KEY);
+      currentUser = null;
       document.getElementById("appScreen").classList.add("hidden");
       document.getElementById("authScreen").classList.remove("hidden");
       setMsg("Logged out.");
@@ -282,7 +359,7 @@
       document.getElementById("addTradeCard").classList.toggle("hidden");
     };
 
-    document.getElementById("tradeForm").onsubmit = (e) => {
+    document.getElementById("tradeForm").onsubmit = async (e) => {
       e.preventDefault();
       trades.unshift({
         date: document.getElementById("tDate").value,
@@ -294,6 +371,7 @@
       e.target.reset();
       document.getElementById("addTradeCard").classList.add("hidden");
       renderTrades();
+      await syncTradesToServer();
     };
 
     function renderTrades() {
@@ -323,4 +401,4 @@
     }
   </script>
 </body>
-          </html>
+</html>
