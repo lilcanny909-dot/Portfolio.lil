@@ -71,6 +71,16 @@
     th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
     th { color: var(--muted); }
     .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .pill.win { background: rgba(16, 185, 129, 0.16); color: var(--win); }
+    .pill.loss { background: rgba(239, 68, 68, 0.16); color: var(--loss); }
   </style>
 </head>
 <body>
@@ -142,9 +152,13 @@
           <option value="Buy">Buy</option>
           <option value="Sell">Sell</option>
         </select>
+        <select id="tOutcome">
+          <option value="WIN">Closed in Profit (+RR)</option>
+          <option value="LOSS">Closed in Loss (-RR)</option>
+        </select>
         <input id="tSetup" type="text" placeholder="Setup / Model" required />
-        <input id="tR" type="number" step="0.1" placeholder="Result in R (e.g. 2.5 or -1)" required />
-        <button type="submit" class="primary">Save</button>
+        <input id="tR" type="number" step="0.1" min="0.1" placeholder="RR size (e.g. 2.5 or 1)" required />
+        <button type="submit" class="primary">Save Trade</button>
       </form>
     </div>
 
@@ -166,7 +180,7 @@
       <div style="overflow-x:auto;margin-top:8px;">
         <table>
           <thead>
-            <tr><th>Date</th><th>Pair</th><th>Side</th><th>Setup</th><th>Result</th></tr>
+            <tr><th>Date</th><th>Pair</th><th>Side</th><th>Setup</th><th>Outcome / RR</th></tr>
           </thead>
           <tbody id="tradeBody"></tbody>
         </table>
@@ -310,7 +324,6 @@
       renderTrades();
     }
 
-    // Restore active session on page reload
     (async function restoreSession() {
       const token = localStorage.getItem(TOKEN_KEY);
       if (!token) return;
@@ -361,12 +374,17 @@
 
     document.getElementById("tradeForm").onsubmit = async (e) => {
       e.preventDefault();
+      const outcome = document.getElementById("tOutcome").value;
+      const rawMagnitude = Math.abs(parseFloat(document.getElementById("tR").value));
+      const signedR = outcome === "LOSS" ? -rawMagnitude : rawMagnitude;
+
       trades.unshift({
         date: document.getElementById("tDate").value,
         pair: document.getElementById("tPair").value,
         side: document.getElementById("tSide").value,
+        outcome,
         setup: document.getElementById("tSetup").value,
-        r: parseFloat(document.getElementById("tR").value)
+        r: signedR
       });
       e.target.reset();
       document.getElementById("addTradeCard").classList.add("hidden");
@@ -383,21 +401,30 @@
 
       document.getElementById("sTotal").textContent = String(total);
       document.getElementById("sWinRate").textContent = `${winRate}%`;
-      document.getElementById("sNetR").textContent = `${Number(netR) > 0 ? "+" : ""}${netR}R`;
+      const netEl = document.getElementById("sNetR");
+      netEl.textContent = `${Number(netR) > 0 ? "+" : ""}${netR}R`;
+      netEl.style.color = Number(netR) > 0 ? "var(--win)" : Number(netR) < 0 ? "var(--loss)" : "var(--text)";
       document.getElementById("sAvgWin").textContent = `+${avgWin}R`;
 
       const tbody = document.getElementById("tradeBody");
-      tbody.innerHTML = trades.map(t => `
-        <tr>
-          <td>${t.date}</td>
-          <td><strong>${t.pair}</strong></td>
-          <td>${t.side}</td>
-          <td>${t.setup}</td>
-          <td style="color:${t.r > 0 ? "var(--win)" : t.r < 0 ? "var(--loss)" : "var(--muted)"};font-weight:700;">
-            ${t.r > 0 ? "+" : ""}${t.r}R
-          </td>
-        </tr>
-      `).join("");
+      tbody.innerHTML = trades.map(t => {
+        const isWin = t.r > 0;
+        const label = isWin ? "PROFIT" : "LOSS";
+        const pillClass = isWin ? "win" : "loss";
+        const rFormatted = `${isWin ? "+" : ""}${t.r}R`;
+        return `
+          <tr>
+            <td>${t.date}</td>
+            <td><strong>${t.pair}</strong></td>
+            <td>${t.side}</td>
+            <td>${t.setup}</td>
+            <td>
+              <span class="pill ${pillClass}">${label}</span>
+              <strong style="color:${isWin ? "var(--win)" : "var(--loss)"};">${rFormatted}</strong>
+            </td>
+          </tr>
+        `;
+      }).join("");
     }
   </script>
 </body>
